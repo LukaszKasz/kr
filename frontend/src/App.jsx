@@ -9,16 +9,12 @@ export default function App() {
     const [errorMsg, setErrorMsg] = useState('');
     const [cameraError, setCameraError] = useState('');
     const [scanCount, setScanCount] = useState(0);
-    const [zoomLevel, setZoomLevel] = useState(1);
-    const [zoomRange, setZoomRange] = useState({ min: 1, max: 1 });
-    const [focusTap, setFocusTap] = useState(false);
 
     const videoRef = useRef(null);
     const streamRef = useRef(null);
     const scanIntervalRef = useRef(null);
     const cooldownRef = useRef(false);
     const detectorRef = useRef(null);
-    const trackRef = useRef(null);
 
     useEffect(() => {
         return () => stopScanner();
@@ -55,54 +51,18 @@ export default function App() {
         setTimeout(() => { cooldownRef.current = false; }, SCAN_COOLDOWN_MS);
     }, [saveScan]);
 
-    const changeZoom = useCallback(async (newZoom) => {
-        const z = parseFloat(newZoom);
-        setZoomLevel(z);
-        if (trackRef.current) {
-            try {
-                await trackRef.current.applyConstraints({ advanced: [{ zoom: z }] });
-            } catch (e) { }
-        }
-    }, []);
-
-    // Tap to refocus
-    const handleTapFocus = useCallback(async () => {
-        if (!trackRef.current) return;
-        setFocusTap(true);
-        setTimeout(() => setFocusTap(false), 600);
-
-        try {
-            const caps = trackRef.current.getCapabilities ? trackRef.current.getCapabilities() : {};
-            if (caps.focusMode) {
-                // Switch to single-shot to trigger refocus, then back to continuous
-                if (caps.focusMode.includes('single-shot')) {
-                    await trackRef.current.applyConstraints({ advanced: [{ focusMode: 'single-shot' }] });
-                    setTimeout(async () => {
-                        try {
-                            if (trackRef.current && caps.focusMode.includes('continuous')) {
-                                await trackRef.current.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
-                            }
-                        } catch (e) { }
-                    }, 500);
-                }
-            }
-        } catch (e) {
-            console.log('Focus tap error:', e);
-        }
-    }, []);
-
     const startScanner = useCallback(async () => {
         setCameraError('');
 
         if (!('BarcodeDetector' in window)) {
-            setCameraError('Twoja przeglądarka nie obsługuje skanowania QR. Użyj Chrome lub Safari.');
+            setCameraError('Twoja przeglądarka nie obsługuje skanowania QR. Użyj Chrome na Androidzie.');
             return;
         }
 
         try {
             detectorRef.current = new BarcodeDetector({ formats: ['qr_code'] });
 
-            // Request camera with autofocus from the start
+            // Open camera — NO focus/zoom constraints, let the phone handle it naturally
             const stream = await navigator.mediaDevices.getUserMedia({
                 video: {
                     facingMode: { ideal: 'environment' },
@@ -119,43 +79,7 @@ export default function App() {
             video.setAttribute('playsinline', 'true');
             await video.play();
 
-            const track = stream.getVideoTracks()[0];
-            trackRef.current = track;
-
-            if (track) {
-                const caps = track.getCapabilities ? track.getCapabilities() : {};
-
-                // Setup zoom slider
-                if (caps.zoom) {
-                    setZoomRange({ min: caps.zoom.min, max: caps.zoom.max });
-                    const initialZoom = Math.min(3.0, caps.zoom.max);
-                    setZoomLevel(initialZoom);
-                }
-
-                // Apply constraints one by one to avoid conflicts
-                try {
-                    // 1. Set continuous autofocus
-                    if (caps.focusMode && caps.focusMode.includes('continuous')) {
-                        await track.applyConstraints({
-                            advanced: [{ focusMode: 'continuous' }]
-                        });
-                    }
-                } catch (e) {
-                    console.log('Focus mode error:', e);
-                }
-
-                try {
-                    // 2. Set zoom
-                    if (caps.zoom) {
-                        await track.applyConstraints({
-                            advanced: [{ zoom: Math.min(3.0, caps.zoom.max) }]
-                        });
-                    }
-                } catch (e) {
-                    console.log('Zoom error:', e);
-                }
-            }
-
+            // DO NOT touch focus or zoom — let the phone's native autofocus work
             setScanning(true);
 
             scanIntervalRef.current = setInterval(async () => {
@@ -192,10 +116,8 @@ export default function App() {
         if (videoRef.current) {
             videoRef.current.srcObject = null;
         }
-        trackRef.current = null;
         detectorRef.current = null;
         setScanning(false);
-        setZoomRange({ min: 1, max: 1 });
     }, []);
 
     const getStatusIcon = () => {
@@ -229,35 +151,17 @@ export default function App() {
                         </div>
                     )}
 
-                    <div className="scanner-video-wrapper" style={{ display: scanning ? 'block' : 'none' }}>
+                    <div
+                        className="scanner-video-wrapper"
+                        style={{ display: scanning ? 'block' : 'none' }}
+                    >
                         <video
                             ref={videoRef}
                             className="scanner-video"
                             playsInline
                             muted
-                            onClick={handleTapFocus}
                         />
-                        {focusTap && <div className="focus-indicator" />}
-                        {scanning && (
-                            <div className="tap-hint">Dotknij ekran aby wyostrzyć</div>
-                        )}
                     </div>
-
-                    {scanning && zoomRange.max > 1 && (
-                        <div className="zoom-control">
-                            <span className="zoom-label">🔍</span>
-                            <input
-                                type="range"
-                                className="zoom-slider"
-                                min={zoomRange.min}
-                                max={zoomRange.max}
-                                step="0.1"
-                                value={zoomLevel}
-                                onChange={(e) => changeZoom(e.target.value)}
-                            />
-                            <span className="zoom-value">{zoomLevel.toFixed(1)}x</span>
-                        </div>
-                    )}
 
                     {cameraError && (
                         <div className="camera-error">

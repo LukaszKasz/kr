@@ -14,7 +14,6 @@
 :root {
   --color-bg: #0f172a;
   --color-bg-card: rgba(30, 41, 59, 0.7);
-  --color-bg-card-hover: rgba(30, 41, 59, 0.85);
   --color-surface: #1e293b;
   --color-border: rgba(148, 163, 184, 0.15);
   --color-text: #f1f5f9;
@@ -47,10 +46,8 @@ body {
   line-height: 1.6;
   min-height: 100dvh;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Subtle gradient background */
 body::before {
   content: '';
   position: fixed;
@@ -77,55 +74,13 @@ body::before {
   padding: 0 16px;
 }
 
-/* --- Header --- */
-.header {
-  text-align: center;
-  padding: 32px 0 20px;
-}
-
-.header-icon {
-  font-size: 2.5rem;
-  margin-bottom: 8px;
-  animation: pulse-glow 2.5s ease-in-out infinite;
-}
-
-@keyframes pulse-glow {
-
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  50% {
-    opacity: 0.85;
-    transform: scale(1.05);
-  }
-}
-
-.header-title {
-  font-size: 1.75rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  background: linear-gradient(135deg, #e2e8f0, #6366f1);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.header-subtitle {
-  font-size: 0.875rem;
-  color: var(--color-text-muted);
-  margin-top: 4px;
-  font-weight: 400;
-}
-
 /* --- Main --- */
 .main {
   flex: 1;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  padding-top: 24px;
   padding-bottom: 24px;
 }
 
@@ -138,7 +93,6 @@ body::before {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   box-shadow: var(--shadow);
-  transition: background var(--transition);
 }
 
 .card-label {
@@ -155,12 +109,23 @@ body::before {
   padding: 16px;
 }
 
-/* Placeholder - shown when scanner is not active */
+.scanner-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 16px;
+  color: var(--color-text);
+  background: linear-gradient(135deg, #e2e8f0, #6366f1);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Placeholder */
 .scanner-placeholder-wrapper {
   width: 100%;
   min-height: 280px;
   border-radius: var(--radius-sm);
-  overflow: hidden;
   background: var(--color-surface);
   border: 2px dashed var(--color-border);
   display: flex;
@@ -179,18 +144,17 @@ body::before {
   opacity: 0.5;
 }
 
-/* Scanner viewport - html5-qrcode controls the content */
+/* Scanner viewport — html5-qrcode controls this */
 .scanner-viewport {
   width: 100%;
   border-radius: var(--radius-sm);
   overflow: hidden;
-  background: var(--color-surface);
+  background: #000;
   border: 2px solid var(--color-accent);
   box-shadow: 0 0 20px var(--color-accent-glow);
-  position: relative;
 }
 
-/* html5-qrcode overrides — make video fill the container */
+/* html5-qrcode overrides */
 #qr-reader {
   width: 100% !important;
   border: none !important;
@@ -199,24 +163,7 @@ body::before {
 
 #qr-reader video {
   width: 100% !important;
-  height: auto !important;
-  border-radius: var(--radius-sm);
-  object-fit: cover;
   display: block !important;
-}
-
-#qr-reader>div {
-  max-width: 100% !important;
-}
-
-/* Hide helper images from html5-qrcode */
-#qr-reader img {
-  display: none !important;
-}
-
-/* Hide the built-in scan region UI if needed */
-#qr-reader__scan_region {
-  min-height: 200px;
 }
 
 #qr-reader__dashboard {
@@ -224,7 +171,7 @@ body::before {
 }
 
 #qr-shaded-region {
-  border-color: var(--color-accent) !important;
+  border-color: rgba(99, 102, 241, 0.7) !important;
 }
 
 .scanner-controls {
@@ -353,7 +300,6 @@ body::before {
   font-weight: 500;
 }
 
-/* Status variants */
 .status-saving .status-row {
   border-color: rgba(99, 102, 241, 0.3);
 }
@@ -416,12 +362,8 @@ body::before {
   letter-spacing: 0.02em;
 }
 
-/* --- Responsive tweaks --- */
+/* --- Responsive --- */
 @media (max-width: 360px) {
-  .header-title {
-    font-size: 1.5rem;
-  }
-
   .btn {
     padding: 12px 24px;
     font-size: 0.9rem;
@@ -435,9 +377,5 @@ body::before {
 @media (min-width: 481px) {
   .app {
     padding: 0 24px;
-  }
-
-  .header {
-    padding-top: 48px;
   }
 }

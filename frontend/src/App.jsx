@@ -7,7 +7,7 @@ const SCANNER_ELEMENT_ID = 'qr-reader';
 export default function App() {
     const [scanning, setScanning] = useState(false);
     const [lastScan, setLastScan] = useState(null);
-    const [saveStatus, setSaveStatus] = useState('idle'); // idle | saving | saved | error
+    const [saveStatus, setSaveStatus] = useState('idle');
     const [errorMsg, setErrorMsg] = useState('');
     const [cameraError, setCameraError] = useState('');
     const [scanCount, setScanCount] = useState(0);
@@ -15,7 +15,6 @@ export default function App() {
     const scannerRef = useRef(null);
     const cooldownRef = useRef(false);
 
-    // Cleanup scanner on unmount
     useEffect(() => {
         return () => {
             if (scannerRef.current) {
@@ -67,7 +66,6 @@ export default function App() {
     const startScanner = useCallback(async () => {
         setCameraError('');
 
-        // Make sure the container is clean before html5-qrcode takes over
         const container = document.getElementById(SCANNER_ELEMENT_ID);
         if (container) {
             container.innerHTML = '';
@@ -79,26 +77,59 @@ export default function App() {
 
             setScanning(true);
 
-            // Small delay to let React update DOM (show the container)
-            await new Promise((r) => setTimeout(r, 100));
+            await new Promise((r) => setTimeout(r, 150));
 
             await scanner.start(
                 { facingMode: 'environment' },
                 {
                     fps: 10,
-                    qrbox: (viewfinderWidth, viewfinderHeight) => {
-                        const size = Math.min(viewfinderWidth, viewfinderHeight) * 0.7;
-                        return { width: Math.floor(size), height: Math.floor(size) };
-                    },
-                    disableFlip: true,
+                    experimentalFeatures: {
+                        useBarCodeDetectorIfSupported: true
+                    }
                 },
                 onScanSuccess,
-                () => { } // ignore scan failures (no QR in frame)
+                () => { }
             );
+
+            // After camera started, apply autofocus + higher resolution
+            try {
+                const videoElem = container.querySelector('video');
+                if (videoElem && videoElem.srcObject) {
+                    const track = videoElem.srcObject.getVideoTracks()[0];
+                    if (track) {
+                        const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+                        const constraints = {};
+
+                        // Request higher resolution
+                        if (capabilities.width) {
+                            constraints.width = { ideal: capabilities.width.max || 1920 };
+                        }
+                        if (capabilities.height) {
+                            constraints.height = { ideal: capabilities.height.max || 1080 };
+                        }
+
+                        // Enable continuous autofocus
+                        if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
+                            constraints.focusMode = 'continuous';
+                        }
+
+                        // Zoom 2x for small QR codes
+                        if (capabilities.zoom) {
+                            const targetZoom = Math.min(2.0, capabilities.zoom.max);
+                            constraints.zoom = targetZoom;
+                        }
+
+                        if (Object.keys(constraints).length > 0) {
+                            await track.applyConstraints(constraints);
+                        }
+                    }
+                }
+            } catch (focusErr) {
+                console.log('Could not apply camera constraints:', focusErr);
+            }
         } catch (err) {
             setScanning(false);
-            const msg =
-                err?.toString?.() || 'Nie udało się uruchomić kamery';
+            const msg = err?.toString?.() || 'Nie udało się uruchomić kamery';
             if (msg.includes('NotAllowedError') || msg.includes('Permission')) {
                 setCameraError('Brak zgody na dostęp do kamery. Sprawdź ustawienia przeglądarki.');
             } else if (msg.includes('NotFoundError')) {
@@ -124,43 +155,29 @@ export default function App() {
 
     const getStatusIcon = () => {
         switch (saveStatus) {
-            case 'saving':
-                return '⏳';
-            case 'saved':
-                return '✅';
-            case 'error':
-                return '❌';
-            default:
-                return '—';
+            case 'saving': return '⏳';
+            case 'saved': return '✅';
+            case 'error': return '❌';
+            default: return '—';
         }
     };
 
     const getStatusText = () => {
         switch (saveStatus) {
-            case 'saving':
-                return 'Zapisywanie…';
-            case 'saved':
-                return 'Zapisano pomyślnie';
-            case 'error':
-                return errorMsg || 'Wystąpił błąd';
-            default:
-                return 'Oczekiwanie na skan';
+            case 'saving': return 'Zapisywanie…';
+            case 'saved': return 'Zapisano pomyślnie';
+            case 'error': return errorMsg || 'Wystąpił błąd';
+            default: return 'Oczekiwanie na skan';
         }
     };
 
     return (
         <div className="app">
-            {/* Header */}
-            <header className="header">
-                <div className="header-icon">📷</div>
-                <h1 className="header-title">Skaner QR</h1>
-                <p className="header-subtitle">Skanuj etykiety i zapisuj kody</p>
-            </header>
-
             <main className="main">
                 {/* Scanner Card */}
                 <section className="card scanner-card">
-                    {/* Placeholder - OUTSIDE the scanner container */}
+                    <h2 className="scanner-title">Skanuj kod QR</h2>
+
                     {!scanning && !cameraError && (
                         <div className="scanner-placeholder-wrapper">
                             <span className="scanner-placeholder-icon">📸</span>
@@ -168,7 +185,6 @@ export default function App() {
                         </div>
                     )}
 
-                    {/* Scanner container - always in DOM, html5-qrcode controls it */}
                     <div
                         id={SCANNER_ELEMENT_ID}
                         className="scanner-viewport"

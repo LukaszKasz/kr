@@ -130,30 +130,16 @@ export default function App() {
                     setZoomRange({ min: caps.zoom.min, max: caps.zoom.max });
                     const initialZoom = Math.min(3.0, caps.zoom.max);
                     setZoomLevel(initialZoom);
-                }
 
-                // Apply constraints one by one to avoid conflicts
-                try {
-                    // 1. Set continuous autofocus
-                    if (caps.focusMode && caps.focusMode.includes('continuous')) {
-                        await track.applyConstraints({
-                            advanced: [{ focusMode: 'continuous' }]
-                        });
-                    }
-                } catch (e) {
-                    console.log('Focus mode error:', e);
-                }
-
-                try {
-                    // 2. Set zoom
-                    if (caps.zoom) {
+                    try {
                         await track.applyConstraints({
                             advanced: [{ zoom: Math.min(3.0, caps.zoom.max) }]
                         });
+                    } catch (e) {
+                        console.log('Zoom error:', e);
                     }
-                } catch (e) {
-                    console.log('Zoom error:', e);
                 }
+                // NOTE: do NOT set focusMode — let the phone handle autofocus natively
             }
 
             setScanning(true);

@@ -1,0 +1,8 @@
+# Wyłącz listowanie katalogów
+Options -Indexes
+
+# Zablokuj dostęp do plików .txt w katalogu data
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^data/ - [F,L]
+</IfModule>

@@ -1,8 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Html5Qrcode } from 'html5-qrcode';
 
 const SCAN_COOLDOWN_MS = 2000;
-const SCANNER_ELEMENT_ID = 'qr-reader';
 
 export default function App() {
     const [scanning, setScanning] = useState(false);
@@ -11,18 +9,19 @@ export default function App() {
     const [errorMsg, setErrorMsg] = useState('');
     const [cameraError, setCameraError] = useState('');
     const [scanCount, setScanCount] = useState(0);
+    const [zoomLevel, setZoomLevel] = useState(1);
+    const [zoomRange, setZoomRange] = useState({ min: 1, max: 1 });
+    const [focusTap, setFocusTap] = useState(false);
 
-    const scannerRef = useRef(null);
+    const videoRef = useRef(null);
+    const streamRef = useRef(null);
+    const scanIntervalRef = useRef(null);
     const cooldownRef = useRef(false);
+    const detectorRef = useRef(null);
+    const trackRef = useRef(null);
 
     useEffect(() => {
-        return () => {
-            if (scannerRef.current) {
-                scannerRef.current.stop().catch(() => { });
-                try { scannerRef.current.clear(); } catch (e) { }
-                scannerRef.current = null;
-            }
-        };
+        return () => stopScanner();
     }, []);
 
     const saveScan = useCallback(async (text) => {
@@ -48,87 +47,128 @@ export default function App() {
         }
     }, []);
 
-    const onScanSuccess = useCallback(
-        (decodedText) => {
-            if (cooldownRef.current) return;
+    const handleDetection = useCallback((decodedText) => {
+        if (cooldownRef.current) return;
+        cooldownRef.current = true;
+        setLastScan(decodedText);
+        saveScan(decodedText);
+        setTimeout(() => { cooldownRef.current = false; }, SCAN_COOLDOWN_MS);
+    }, [saveScan]);
 
-            cooldownRef.current = true;
-            setLastScan(decodedText);
-            saveScan(decodedText);
+    const changeZoom = useCallback(async (newZoom) => {
+        const z = parseFloat(newZoom);
+        setZoomLevel(z);
+        if (trackRef.current) {
+            try {
+                await trackRef.current.applyConstraints({ advanced: [{ zoom: z }] });
+            } catch (e) { }
+        }
+    }, []);
 
-            setTimeout(() => {
-                cooldownRef.current = false;
-            }, SCAN_COOLDOWN_MS);
-        },
-        [saveScan]
-    );
+    // Tap to refocus
+    const handleTapFocus = useCallback(async () => {
+        if (!trackRef.current) return;
+        setFocusTap(true);
+        setTimeout(() => setFocusTap(false), 600);
+
+        try {
+            const caps = trackRef.current.getCapabilities ? trackRef.current.getCapabilities() : {};
+            if (caps.focusMode) {
+                // Switch to single-shot to trigger refocus, then back to continuous
+                if (caps.focusMode.includes('single-shot')) {
+                    await trackRef.current.applyConstraints({ advanced: [{ focusMode: 'single-shot' }] });
+                    setTimeout(async () => {
+                        try {
+                            if (trackRef.current && caps.focusMode.includes('continuous')) {
+                                await trackRef.current.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+                            }
+                        } catch (e) { }
+                    }, 500);
+                }
+            }
+        } catch (e) {
+            console.log('Focus tap error:', e);
+        }
+    }, []);
 
     const startScanner = useCallback(async () => {
         setCameraError('');
 
-        const container = document.getElementById(SCANNER_ELEMENT_ID);
-        if (container) {
-            container.innerHTML = '';
+        if (!('BarcodeDetector' in window)) {
+            setCameraError('Twoja przeglądarka nie obsługuje skanowania QR. Użyj Chrome lub Safari.');
+            return;
         }
 
         try {
-            const scanner = new Html5Qrcode(SCANNER_ELEMENT_ID);
-            scannerRef.current = scanner;
+            detectorRef.current = new BarcodeDetector({ formats: ['qr_code'] });
+
+            // Request camera with autofocus from the start
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: { ideal: 'environment' },
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 },
+                },
+                audio: false,
+            });
+
+            streamRef.current = stream;
+
+            const video = videoRef.current;
+            video.srcObject = stream;
+            video.setAttribute('playsinline', 'true');
+            await video.play();
+
+            const track = stream.getVideoTracks()[0];
+            trackRef.current = track;
+
+            if (track) {
+                const caps = track.getCapabilities ? track.getCapabilities() : {};
+
+                // Setup zoom slider
+                if (caps.zoom) {
+                    setZoomRange({ min: caps.zoom.min, max: caps.zoom.max });
+                    const initialZoom = Math.min(3.0, caps.zoom.max);
+                    setZoomLevel(initialZoom);
+                }
+
+                // Apply constraints one by one to avoid conflicts
+                try {
+                    // 1. Set continuous autofocus
+                    if (caps.focusMode && caps.focusMode.includes('continuous')) {
+                        await track.applyConstraints({
+                            advanced: [{ focusMode: 'continuous' }]
+                        });
+                    }
+                } catch (e) {
+                    console.log('Focus mode error:', e);
+                }
+
+                try {
+                    // 2. Set zoom
+                    if (caps.zoom) {
+                        await track.applyConstraints({
+                            advanced: [{ zoom: Math.min(3.0, caps.zoom.max) }]
+                        });
+                    }
+                } catch (e) {
+                    console.log('Zoom error:', e);
+                }
+            }
 
             setScanning(true);
 
-            await new Promise((r) => setTimeout(r, 150));
-
-            await scanner.start(
-                { facingMode: 'environment' },
-                {
-                    fps: 10,
-                    experimentalFeatures: {
-                        useBarCodeDetectorIfSupported: true
+            scanIntervalRef.current = setInterval(async () => {
+                if (!videoRef.current || videoRef.current.readyState < 2) return;
+                try {
+                    const barcodes = await detectorRef.current.detect(videoRef.current);
+                    if (barcodes.length > 0) {
+                        handleDetection(barcodes[0].rawValue);
                     }
-                },
-                onScanSuccess,
-                () => { }
-            );
+                } catch (e) { }
+            }, 150);
 
-            // After camera started, apply autofocus + higher resolution
-            try {
-                const videoElem = container.querySelector('video');
-                if (videoElem && videoElem.srcObject) {
-                    const track = videoElem.srcObject.getVideoTracks()[0];
-                    if (track) {
-                        const capabilities = track.getCapabilities ? track.getCapabilities() : {};
-                        const constraints = {};
-
-                        // Request higher resolution
-                        if (capabilities.width) {
-                            constraints.width = { ideal: capabilities.width.max || 1920 };
-                        }
-                        if (capabilities.height) {
-                            constraints.height = { ideal: capabilities.height.max || 1080 };
-                        }
-
-                        // Enable continuous autofocus
-                        if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
-                            constraints.focusMode = 'continuous';
-                        }
-
-                        // Zoom 2x for small QR codes
-                        if (capabilities.zoom) {
-                            const targetZoom = Math.min(2.0, capabilities.zoom.max);
-                            constraints.zoom = targetZoom;
-                        }
-
-                        if (Object.keys(constraints).length > 0) {
-                            await track.applyConstraints(constraints);
-                        }
-                    }
-                }
-            } catch (focusErr) {
-                console.log('Could not apply camera constraints:', focusErr);
-            }
         } catch (err) {
-            setScanning(false);
             const msg = err?.toString?.() || 'Nie udało się uruchomić kamery';
             if (msg.includes('NotAllowedError') || msg.includes('Permission')) {
                 setCameraError('Brak zgody na dostęp do kamery. Sprawdź ustawienia przeglądarki.');
@@ -138,19 +178,24 @@ export default function App() {
                 setCameraError(msg);
             }
         }
-    }, [onScanSuccess]);
+    }, [handleDetection]);
 
-    const stopScanner = useCallback(async () => {
-        if (scannerRef.current) {
-            try {
-                await scannerRef.current.stop();
-                scannerRef.current.clear();
-            } catch {
-                // ignore
-            }
-            scannerRef.current = null;
+    const stopScanner = useCallback(() => {
+        if (scanIntervalRef.current) {
+            clearInterval(scanIntervalRef.current);
+            scanIntervalRef.current = null;
         }
+        if (streamRef.current) {
+            streamRef.current.getTracks().forEach(t => t.stop());
+            streamRef.current = null;
+        }
+        if (videoRef.current) {
+            videoRef.current.srcObject = null;
+        }
+        trackRef.current = null;
+        detectorRef.current = null;
         setScanning(false);
+        setZoomRange({ min: 1, max: 1 });
     }, []);
 
     const getStatusIcon = () => {
@@ -174,7 +219,6 @@ export default function App() {
     return (
         <div className="app">
             <main className="main">
-                {/* Scanner Card */}
                 <section className="card scanner-card">
                     <h2 className="scanner-title">Skanuj kod QR</h2>
 
@@ -185,11 +229,35 @@ export default function App() {
                         </div>
                     )}
 
-                    <div
-                        id={SCANNER_ELEMENT_ID}
-                        className="scanner-viewport"
-                        style={{ display: scanning ? 'block' : 'none' }}
-                    ></div>
+                    <div className="scanner-video-wrapper" style={{ display: scanning ? 'block' : 'none' }}>
+                        <video
+                            ref={videoRef}
+                            className="scanner-video"
+                            playsInline
+                            muted
+                            onClick={handleTapFocus}
+                        />
+                        {focusTap && <div className="focus-indicator" />}
+                        {scanning && (
+                            <div className="tap-hint">Dotknij ekran aby wyostrzyć</div>
+                        )}
+                    </div>
+
+                    {scanning && zoomRange.max > 1 && (
+                        <div className="zoom-control">
+                            <span className="zoom-label">🔍</span>
+                            <input
+                                type="range"
+                                className="zoom-slider"
+                                min={zoomRange.min}
+                                max={zoomRange.max}
+                                step="0.1"
+                                value={zoomLevel}
+                                onChange={(e) => changeZoom(e.target.value)}
+                            />
+                            <span className="zoom-value">{zoomLevel.toFixed(1)}x</span>
+                        </div>
+                    )}
 
                     {cameraError && (
                         <div className="camera-error">
@@ -213,7 +281,6 @@ export default function App() {
                     </div>
                 </section>
 
-                {/* Last Scan */}
                 <section className="card result-card">
                     <h2 className="card-label">Ostatni skan</h2>
                     <div className={`scan-result ${lastScan ? 'has-value' : ''}`}>
@@ -221,7 +288,6 @@ export default function App() {
                     </div>
                 </section>
 
-                {/* Save Status */}
                 <section className={`card status-card status-${saveStatus}`}>
                     <h2 className="card-label">Status zapisu</h2>
                     <div className="status-row">
@@ -230,7 +296,6 @@ export default function App() {
                     </div>
                 </section>
 
-                {/* Counter */}
                 {scanCount > 0 && (
                     <div className="counter">
                         Zapisano dzisiaj: <strong>{scanCount}</strong> {scanCount === 1 ? 'skan' : scanCount < 5 ? 'skany' : 'skanów'}

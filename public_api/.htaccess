@@ -1,6 +1,12 @@
 # Wyłącz listowanie katalogów
 Options -Indexes
 
+# Basic Auth
+AuthType Basic
+AuthName "Krawcowa App"
+AuthUserFile /home/lkasztel/domains/kr.medmelook.pl/.htpasswd
+Require valid-user
+
 # Zablokuj dostęp do plików .txt w katalogu data
 <IfModule mod_rewrite.c>
     RewriteEngine On

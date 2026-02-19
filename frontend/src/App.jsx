@@ -1,17 +1,18 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
+const OPERATORS = ['Gosia', 'Ksenia', 'Natalia', 'Łukasz'];
 const SCAN_COOLDOWN_MS = 2000;
 
 export default function App() {
+    const [operator, setOperator] = useState(() => localStorage.getItem('qr_operator') || null);
     const [scanning, setScanning] = useState(false);
     const [lastScan, setLastScan] = useState(null);
     const [saveStatus, setSaveStatus] = useState('idle');
     const [errorMsg, setErrorMsg] = useState('');
     const [cameraError, setCameraError] = useState('');
     const [scanCount, setScanCount] = useState(0);
-    const [zoomLevel, setZoomLevel] = useState(1);
-    const [zoomRange, setZoomRange] = useState({ min: 1, max: 1 });
     const [focusTap, setFocusTap] = useState(false);
+    const [scanFlash, setScanFlash] = useState(false);
 
     const videoRef = useRef(null);
     const streamRef = useRef(null);
@@ -19,9 +20,20 @@ export default function App() {
     const cooldownRef = useRef(false);
     const detectorRef = useRef(null);
     const trackRef = useRef(null);
+    const stopRef = useRef(null);
 
     useEffect(() => {
         return () => stopScanner();
+    }, []);
+
+    const selectOperator = useCallback((name) => {
+        localStorage.setItem('qr_operator', name);
+        setOperator(name);
+    }, []);
+
+    const changeOperator = useCallback(() => {
+        setOperator(null);
+        localStorage.removeItem('qr_operator');
     }, []);
 
     const saveScan = useCallback(async (text) => {
@@ -31,39 +43,44 @@ export default function App() {
             const res = await fetch('./api/save.php', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ qr_text: text }),
+                body: JSON.stringify({ qr_text: text, operator: operator }),
             });
             const data = await res.json();
             if (data.success) {
                 setSaveStatus('saved');
                 setScanCount((c) => c + 1);
+                // Reset status and clear last scan after 1 second
+                setTimeout(() => {
+                    setSaveStatus((current) => current === 'saved' ? 'idle' : current);
+                    setLastScan(null);
+                }, 1000);
             } else {
                 setSaveStatus('error');
                 setErrorMsg(data.error || 'Nieznany błąd serwera');
             }
         } catch (err) {
             setSaveStatus('error');
-            setErrorMsg('Brak połączenia z serwerem');
+            console.error('Server response error:', err);
+            setErrorMsg('Błąd: ' + (err.message || 'Brak połączenia'));
         }
-    }, []);
+    }, [operator]);
 
     const handleDetection = useCallback((decodedText) => {
         if (cooldownRef.current) return;
+
+        // Visual flash effect (longer)
+        setScanFlash(true);
+        setTimeout(() => setScanFlash(false), 400);
+
         cooldownRef.current = true;
         setLastScan(decodedText);
         saveScan(decodedText);
-        setTimeout(() => { cooldownRef.current = false; }, SCAN_COOLDOWN_MS);
-    }, [saveScan]);
 
-    const changeZoom = useCallback(async (newZoom) => {
-        const z = parseFloat(newZoom);
-        setZoomLevel(z);
-        if (trackRef.current) {
-            try {
-                await trackRef.current.applyConstraints({ advanced: [{ zoom: z }] });
-            } catch (e) { }
-        }
-    }, []);
+        // Reset cooldown after 2 seconds to allow next scan without closing camera
+        setTimeout(() => {
+            cooldownRef.current = false;
+        }, SCAN_COOLDOWN_MS);
+    }, [saveScan]);
 
     // Tap to refocus
     const handleTapFocus = useCallback(async () => {
@@ -74,8 +91,9 @@ export default function App() {
         try {
             const caps = trackRef.current.getCapabilities ? trackRef.current.getCapabilities() : {};
             if (caps.focusMode) {
-                // Switch to single-shot to trigger refocus, then back to continuous
-                if (caps.focusMode.includes('single-shot')) {
+                if (caps.focusMode.includes('continuous')) {
+                    await trackRef.current.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+                } else if (caps.focusMode.includes('single-shot')) {
                     await trackRef.current.applyConstraints({ advanced: [{ focusMode: 'single-shot' }] });
                     setTimeout(async () => {
                         try {
@@ -93,7 +111,8 @@ export default function App() {
 
     const startScanner = useCallback(async () => {
         setCameraError('');
-
+        setSaveStatus('idle');
+        setLastScan(null);
         if (!('BarcodeDetector' in window)) {
             setCameraError('Twoja przeglądarka nie obsługuje skanowania QR. Użyj Chrome lub Safari.');
             return;
@@ -102,12 +121,12 @@ export default function App() {
         try {
             detectorRef.current = new BarcodeDetector({ formats: ['qr_code'] });
 
-            // Request camera with autofocus from the start
             const stream = await navigator.mediaDevices.getUserMedia({
                 video: {
                     facingMode: { ideal: 'environment' },
                     width: { ideal: 1920 },
                     height: { ideal: 1080 },
+                    frameRate: { ideal: 30, max: 60 },
                 },
                 audio: false,
             });
@@ -125,21 +144,18 @@ export default function App() {
             if (track) {
                 const caps = track.getCapabilities ? track.getCapabilities() : {};
 
-                // Setup zoom slider
                 if (caps.zoom) {
-                    setZoomRange({ min: caps.zoom.min, max: caps.zoom.max });
-                    const initialZoom = Math.min(3.0, caps.zoom.max);
-                    setZoomLevel(initialZoom);
-
+                    const initialZoom = Math.max(caps.zoom.min, 1);
                     try {
-                        await track.applyConstraints({
-                            advanced: [{ zoom: Math.min(3.0, caps.zoom.max) }]
-                        });
-                    } catch (e) {
-                        console.log('Zoom error:', e);
-                    }
+                        await track.applyConstraints({ advanced: [{ zoom: initialZoom }] });
+                    } catch (e) { }
                 }
-                // NOTE: do NOT set focusMode — let the phone handle autofocus natively
+
+                if (caps.focusMode?.includes('continuous')) {
+                    try {
+                        await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+                    } catch (e) { }
+                }
             }
 
             setScanning(true);
@@ -180,9 +196,11 @@ export default function App() {
         }
         trackRef.current = null;
         detectorRef.current = null;
+        cooldownRef.current = false; // reset so next scan works
         setScanning(false);
-        setZoomRange({ min: 1, max: 1 });
     }, []);
+
+    stopRef.current = stopScanner;
 
     const getStatusIcon = () => {
         switch (saveStatus) {
@@ -202,11 +220,45 @@ export default function App() {
         }
     };
 
+    // --- Operator selection screen ---
+    if (!operator) {
+        return (
+            <div className="app">
+                <main className="main operator-screen">
+                    <div className="operator-header">
+                        <span className="operator-header-icon">👤</span>
+                        <h1 className="operator-title">Kto skanuje?</h1>
+                        <p className="operator-subtitle">Wybierz swoje imię</p>
+                    </div>
+                    <div className="operator-grid">
+                        {OPERATORS.map((name) => (
+                            <button
+                                key={name}
+                                className="btn-operator"
+                                onClick={() => selectOperator(name)}
+                            >
+                                {name}
+                            </button>
+                        ))}
+                    </div>
+                </main>
+            </div>
+        );
+    }
+
+    // --- Main scanner screen ---
     return (
         <div className="app">
             <main className="main">
-                <section className="card scanner-card">
-                    <h2 className="scanner-title">Skanuj kod QR</h2>
+
+                {/* Camera view */}
+                <div className="camera-area">
+                    <div className="scanner-topbar">
+                        <h2 className="scanner-title">Skanuj kod QR</h2>
+                        <button className="operator-badge" onClick={changeOperator} title="Zmień operatora">
+                            👤 {operator}
+                        </button>
+                    </div>
 
                     {!scanning && !cameraError && (
                         <div className="scanner-placeholder-wrapper">
@@ -215,7 +267,7 @@ export default function App() {
                         </div>
                     )}
 
-                    <div className="scanner-video-wrapper" style={{ display: scanning ? 'block' : 'none' }}>
+                    <div className={`scanner-video-wrapper ${scanFlash ? 'scan-flash' : ''}`} style={{ display: scanning ? 'flex' : 'none' }}>
                         <video
                             ref={videoRef}
                             className="scanner-video"
@@ -229,51 +281,15 @@ export default function App() {
                         )}
                     </div>
 
-                    {scanning && zoomRange.max > 1 && (
-                        <div className="zoom-control">
-                            <span className="zoom-label">🔍</span>
-                            <input
-                                type="range"
-                                className="zoom-slider"
-                                min={zoomRange.min}
-                                max={zoomRange.max}
-                                step="0.1"
-                                value={zoomLevel}
-                                onChange={(e) => changeZoom(e.target.value)}
-                            />
-                            <span className="zoom-value">{zoomLevel.toFixed(1)}x</span>
-                        </div>
-                    )}
-
                     {cameraError && (
                         <div className="camera-error">
                             <span className="camera-error-icon">⚠️</span>
                             <span>{cameraError}</span>
                         </div>
                     )}
+                </div>
 
-                    <div className="scanner-controls">
-                        {!scanning ? (
-                            <button className="btn btn-start" onClick={startScanner}>
-                                <span className="btn-icon">▶</span>
-                                Uruchom skaner
-                            </button>
-                        ) : (
-                            <button className="btn btn-stop" onClick={stopScanner}>
-                                <span className="btn-icon">⏹</span>
-                                Zatrzymaj
-                            </button>
-                        )}
-                    </div>
-                </section>
-
-                <section className="card result-card">
-                    <h2 className="card-label">Ostatni skan</h2>
-                    <div className={`scan-result ${lastScan ? 'has-value' : ''}`}>
-                        {lastScan || 'Brak skanów'}
-                    </div>
-                </section>
-
+                {/* Status */}
                 <section className={`card status-card status-${saveStatus}`}>
                     <h2 className="card-label">Status zapisu</h2>
                     <div className="status-row">
@@ -282,16 +298,30 @@ export default function App() {
                     </div>
                 </section>
 
-                {scanCount > 0 && (
-                    <div className="counter">
-                        Zapisano dzisiaj: <strong>{scanCount}</strong> {scanCount === 1 ? 'skan' : scanCount < 5 ? 'skany' : 'skanów'}
+                {/* Last scan */}
+                <section className="card result-card">
+                    <h2 className="card-label">Ostatni skan</h2>
+                    <div className={`scan-result ${lastScan ? 'has-value' : ''}`}>
+                        {lastScan || 'Brak skanów'}
                     </div>
-                )}
-            </main>
+                </section>
 
-            <footer className="footer">
-                Krawcowa App &middot; Skaner etykiet
-            </footer>
+                {/* Button at bottom */}
+                <div className="scanner-controls">
+                    {!scanning ? (
+                        <button className="btn btn-start" onClick={startScanner}>
+                            <span className="btn-icon">▶</span>
+                            Uruchom skaner
+                        </button>
+                    ) : (
+                        <button className="btn btn-stop" onClick={stopScanner}>
+                            <span className="btn-icon">⏹</span>
+                            Zatrzymaj
+                        </button>
+                    )}
+                </div>
+
+            </main>
         </div>
     );
 }

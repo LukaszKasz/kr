@@ -1,7 +1,7 @@
 <?php
 /**
  * Endpoint: POST /api/save.php
- * Odbiera JSON { "qr_text": "..." } i dopisuje do pliku data/scans.txt
+ * Odbiera JSON { "qr_text": "...", "operator": "..." } i zapisuje do bazy danych MySQL
  */
 
 header('Content-Type: application/json; charset=utf-8');
@@ -23,6 +23,7 @@ if (!$input || !isset($input['qr_text'])) {
 }
 
 $qrText = trim($input['qr_text']);
+$operator = isset($input['operator']) ? trim($input['operator']) : 'nieznany';
 
 if ($qrText === '') {
     http_response_code(400);
@@ -30,38 +31,16 @@ if ($qrText === '') {
     exit;
 }
 
-// Ścieżka do pliku
-$dataDir = __DIR__ . '/../data';
-$filePath = $dataDir . '/scans.txt';
+// Załaduj konfigurację bazy (ścieżka absolutna do pliku poza public_html)
+require_once __DIR__ . '/../../db_config.php';
 
-// Utwórz katalog data jeśli nie istnieje
-if (!is_dir($dataDir)) {
-    if (!mkdir($dataDir, 0775, true)) {
-        http_response_code(500);
-        echo json_encode(['success' => false, 'error' => 'Nie udało się utworzyć katalogu data']);
-        exit;
-    }
-}
+try {
+    // Zapisz do bazy przy użyciu Prepared Statements (bezpieczeństwo przed SQL Injection)
+    $stmt = $pdo->prepare("INSERT INTO a_scans (operator, qr_text) VALUES (?, ?)");
+    $stmt->execute([$operator, $qrText]);
 
-// Przygotuj linię
-$timestamp = date('Y-m-d H:i:s');
-$line = $timestamp . ' | ' . $qrText . PHP_EOL;
-
-// Zapisz z flock
-$fp = fopen($filePath, 'a');
-if (!$fp) {
-    http_response_code(500);
-    echo json_encode(['success' => false, 'error' => 'Nie udało się otworzyć pliku do zapisu']);
-    exit;
-}
-
-if (flock($fp, LOCK_EX)) {
-    fwrite($fp, $line);
-    flock($fp, LOCK_UN);
-    fclose($fp);
     echo json_encode(['success' => true]);
-} else {
-    fclose($fp);
+} catch (\PDOException $e) {
     http_response_code(500);
-    echo json_encode(['success' => false, 'error' => 'Nie udało się zablokować pliku']);
+    echo json_encode(['success' => false, 'error' => 'Błąd zapisu do bazy: ' . $e->getMessage()]);
 }
